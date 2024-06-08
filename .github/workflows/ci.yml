@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:12
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_DB: github_actions_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ALGOLIASEARCH_API_KEY: ${{ secrets.ALGOLIASEARCH_API_KEY }}
+      ALGOLIASEARCH_APPLICATION_ID: ${{ secrets.ALGOLIASEARCH_APPLICATION_ID }}
+      ALGOLIASEARCH_SEARCH_ONLY_KEY: ${{ secrets.ALGOLIASEARCH_SEARCH_ONLY_KEY }}
+      NGROK_KEY: ${{ secrets.NGROK_KEY }}
+      RAILS_ENV: development
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 2.6.10
+
+      - name: Set up Node.js for Assets
+        uses: actions/setup-node@v3
+        with:
+          node-version: 14
+
+      - name: Install dependencies
+        run: |
+          gem install bundler -v 2.4.22
+          bundle install
+          yarn install
+
+      - name: Copy database.yml.ci to database.yml
+        run: cp config/database.yml.ci config/database.yml
+
+      - name: Set up the database
+        run: |
+          bundle exec rake db:create db:schema:load db:test:prepare
+
+      - name: Precompile assets
+        run: |
+          NODE_ENV=development bundle exec rake assets:precompile
+
+      - name: Install ngrok
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-transport-https
+          curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc > /dev/null
+          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+          sudo apt-get update
+          sudo apt-get install ngrok
+          ngrok config add-authtoken ${{ secrets.NGROK_KEY }}
+
+      - name: Start ngrok and expose local server
+        run: |
+          nohup ngrok http 3000 &
+          sleep 10
+          export NGROK_URL=$(curl --silent --show-error http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          echo "NGROK URL is $NGROK_URL"
+
+      - name: Install Chrome
+        run: |
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Set up Node.js for Sitespeed.io
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install sitespeed.io
+        run: |
+          npm install -g sitespeed.io
+
+      - name: Run sitespeed.io test
+        run: |
+          export URL=$(curl --silent --show-error http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          npx sitespeed.io $URL --budget.configPath=./budget.json --browsertime.chrome.args headless --browsertime.chrome.args disable-gpu --browsertime.chrome.args no-sandbox

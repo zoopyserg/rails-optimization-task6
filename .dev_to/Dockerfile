@@ -56,7 +56,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt,sharing=locked \
   --mount=type=tmpfs,target=/var/log \
   apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -yq dist-upgrade && \
-  DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends \
+  DEBIAN_FRONTEND=interactive apt-get install -yq --no-install-recommends \
     $(grep -Ev '^\s*#' /tmp/Aptfile | xargs)
 
 # Configure bundler
@@ -77,7 +77,14 @@ RUN gem install bundler -v 2.4.22
 RUN mkdir -p /app
 WORKDIR /app
 
+# Copy application code
+COPY . /app
+
+# Install application dependencies
+RUN yarn install
+
 # Document that we're going to expose port 3000
 EXPOSE 3000
+
 # Use Bash as the default command
 CMD ["/bin/bash"]
